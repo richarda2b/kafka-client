@@ -1,12 +1,12 @@
 package org.kafkaeventsource.client
 
 import monix.eval.Task
+import monix.execution.Scheduler
+import monix.kafka.{KafkaConsumerConfig, KafkaConsumerObservable, KafkaProducer, KafkaProducerConfig}
 import monix.kafka.config.AutoOffsetReset
-import monix.kafka.{KafkaConsumerConfig, KafkaConsumerObservable}
-import org.apache.kafka.common.TopicPartition
 
-import scala.concurrent.duration._
 import scala.collection.JavaConverters._
+import scala.concurrent.duration._
 
 
 class Client {
@@ -17,15 +17,31 @@ class Client {
     observableSeekToEndOnStart = true
   )
 
-  def readEvents(aggregateId: String): Task[Unit] = {
+  def readAllEvents(aggregateId: String): Task[List[String]] = {
+    val consumerCfg = KafkaConsumerConfig.default.copy(
+      bootstrapServers = List("172.19.0.3:9092"),
+      groupId = "all-messages",
+      autoOffsetReset = AutoOffsetReset.Earliest,
+      enableAutoCommit = false
+    )
     val consumerTask = KafkaConsumerObservable.createConsumer[String,String](consumerCfg, List(aggregateId))
 
     consumerTask.map { consumer =>
-      consumer.seekToEnd(List[TopicPartition]().asJavaCollection)
       val ls = consumer.poll(1.seconds.toMillis).asScala.map(_.value()).toList
-      println(ls)
-      println("Killing")
       consumer.close()
+      ls
     }
+  }
+
+  def observableReader(aggregateId: String): KafkaConsumerObservable[String, String] = {
+    KafkaConsumerObservable(consumerCfg, List(aggregateId))
+  }
+
+  def sendEvent(topic: String, event: String)(scheduler: Scheduler): Task[Unit] = {
+    val producerCfg = KafkaProducerConfig.default.copy(
+      bootstrapServers = List("172.19.0.3:9092")
+    )
+
+    KafkaProducer[String, String](producerCfg, scheduler).send(topic, event).map(_ => Unit)
   }
 }
