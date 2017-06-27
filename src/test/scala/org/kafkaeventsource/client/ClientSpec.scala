@@ -8,6 +8,7 @@ import monix.kafka.config.AutoOffsetReset
 import monix.kafka.{KafkaConsumerConfig, KafkaConsumerObservable, KafkaProducerConfig, KafkaProducerSink}
 import monix.reactive.{Consumer, Observable}
 import org.apache.kafka.clients.producer.ProducerRecord
+import org.kafkaeventsource.config.EvenStoreConfig
 import org.scalatest.{FlatSpec, GivenWhenThen}
 
 import scala.collection.JavaConverters._
@@ -16,7 +17,7 @@ import scala.concurrent.duration._
 
 class ClientSpec extends FlatSpec with GivenWhenThen {
 
-  val client = new Client
+  val client = new Client(new EvenStoreConfig("172.19.0.3:9092"))
 
   "Client" should "read all messages from topic" in {
     val topic = UUID.randomUUID().toString
@@ -35,9 +36,6 @@ class ClientSpec extends FlatSpec with GivenWhenThen {
 
     val events = Await.result(runTask.runAsync, 10.seconds)
     assert(events.size == 3)
-
-    And("not commit the offset")
-    assert(true)
   }
 
   it should "send and read messages" in {

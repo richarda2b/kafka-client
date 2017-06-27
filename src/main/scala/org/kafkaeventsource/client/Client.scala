@@ -1,26 +1,23 @@
 package org.kafkaeventsource.client
 
+import java.util.UUID
+
 import monix.eval.Task
 import monix.execution.Scheduler
 import monix.kafka.{KafkaConsumerConfig, KafkaConsumerObservable, KafkaProducer, KafkaProducerConfig}
 import monix.kafka.config.AutoOffsetReset
+import org.kafkaeventsource.config.EvenStoreConfig
 
 import scala.collection.JavaConverters._
 import scala.concurrent.duration._
 
 
-class Client {
-  val consumerCfg = KafkaConsumerConfig.default.copy(
-    bootstrapServers = List("172.19.0.3:9092"),
-    groupId = "test-consumer-group",
-    autoOffsetReset = AutoOffsetReset.Earliest,
-    observableSeekToEndOnStart = true
-  )
+class Client(esConfig: EvenStoreConfig) {
 
   def readAllEvents(aggregateId: String): Task[List[String]] = {
     val consumerCfg = KafkaConsumerConfig.default.copy(
-      bootstrapServers = List("172.19.0.3:9092"),
-      groupId = "all-messages",
+      bootstrapServers = List(esConfig.server),
+      groupId = UUID.randomUUID().toString,
       autoOffsetReset = AutoOffsetReset.Earliest,
       enableAutoCommit = false
     )
@@ -34,14 +31,22 @@ class Client {
   }
 
   def observableReader(aggregateId: String): KafkaConsumerObservable[String, String] = {
-    KafkaConsumerObservable(consumerCfg, List(aggregateId))
-  }
-
-  def sendEvent(topic: String, event: String)(scheduler: Scheduler): Task[Unit] = {
-    val producerCfg = KafkaProducerConfig.default.copy(
-      bootstrapServers = List("172.19.0.3:9092")
+    val config = KafkaConsumerConfig.default.copy(
+      bootstrapServers = List(esConfig.server),
+      groupId = UUID.randomUUID().toString,
+      autoOffsetReset = AutoOffsetReset.Earliest
     )
 
-    KafkaProducer[String, String](producerCfg, scheduler).send(topic, event).map(_ => Unit)
+    KafkaConsumerObservable(config, List(aggregateId))
+  }
+
+  def sendEvent(aggregate: String, event: String)(scheduler: Scheduler): Task[Unit] = {
+    val producerCfg = KafkaProducerConfig.default.copy(
+      bootstrapServers = List(esConfig.server)
+    )
+
+    val producer = KafkaProducer[String, String](producerCfg, scheduler)
+
+    producer.send(aggregate, event).map(_ => producer.close())
   }
 }
