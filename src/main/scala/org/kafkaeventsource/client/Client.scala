@@ -4,17 +4,19 @@ import java.util.UUID
 
 import monix.eval.Task
 import monix.execution.Scheduler
-import monix.kafka.{KafkaConsumerConfig, KafkaConsumerObservable, KafkaProducer, KafkaProducerConfig}
 import monix.kafka.config.AutoOffsetReset
+import monix.kafka.{KafkaConsumerConfig, KafkaConsumerObservable, KafkaProducer, KafkaProducerConfig}
 import org.kafkaeventsource.config.EvenStoreConfig
+import org.kafkaeventsource.model.{AggregateId, Event}
 
 import scala.collection.JavaConverters._
 import scala.concurrent.duration._
 
 
-class Client(esConfig: EvenStoreConfig) {
+class Client[T](esConfig: EvenStoreConfig,
+                decodeEventDate: String => T) {
 
-  def readAllEvents(aggregateId: String): Task[List[String]] = {
+  def readAllEvents(aggregateId: String): Task[List[Event[T]]] = {
     val consumerCfg = KafkaConsumerConfig.default.copy(
       bootstrapServers = List(esConfig.server),
       groupId = UUID.randomUUID().toString,
@@ -24,7 +26,7 @@ class Client(esConfig: EvenStoreConfig) {
     val consumerTask = KafkaConsumerObservable.createConsumer[String,String](consumerCfg, List(aggregateId))
 
     consumerTask.map { consumer =>
-      val ls = consumer.poll(1.seconds.toMillis).asScala.map(_.value()).toList
+      val ls = consumer.poll(1.seconds.toMillis).asScala.map(record => Event(AggregateId(record.topic), decodeEventDate(record.value))).toList
       consumer.close()
       ls
     }
@@ -40,13 +42,13 @@ class Client(esConfig: EvenStoreConfig) {
     KafkaConsumerObservable(config, List(aggregateId))
   }
 
-  def sendEvent(aggregate: String, event: String)(scheduler: Scheduler): Task[Unit] = {
+  def sendEvent(event: Event[T])(encodeData: T => String)(scheduler: Scheduler): Task[Unit] = {
     val producerCfg = KafkaProducerConfig.default.copy(
       bootstrapServers = List(esConfig.server)
     )
 
     val producer = KafkaProducer[String, String](producerCfg, scheduler)
 
-    producer.send(aggregate, event).map(_ => producer.close())
+    producer.send(event.aggregateId.value, encodeData(event.data)).map(_ => producer.close())
   }
 }
