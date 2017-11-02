@@ -19,7 +19,7 @@ import scala.concurrent.duration._
 class ClientSpec extends FlatSpec with GivenWhenThen {
 
   case class DummyEventData(content: String)
-  val client = new Client[DummyEventData](new EvenStoreConfig("172.19.0.3:9092"), DummyEventData(_))
+  val client = new Client(new EvenStoreConfig("172.19.0.3:9092"))
 
   "Client" should "read all messages from topic" in {
     val topic = UUID.randomUUID().toString
@@ -34,16 +34,16 @@ class ClientSpec extends FlatSpec with GivenWhenThen {
       .bufferIntrospective(1024)
       .consumeWith(producer)
 
-    val runTask = writeTask.flatMap(_ => client.readAllEvents(topic))
+    val runTask = writeTask.flatMap(_ => client.readAllEvents(topic,  data => Right(DummyEventData(data))))
 
     val events = Await.result(runTask.runAsync, 10.seconds)
     assert(events.size == 3)
   }
 
-  it should "send and read events" in {
+  it should "send events" in {
     val aggregateId = UUID.randomUUID().toString
 
-    val event = Event(AggregateId(aggregateId), DummyEventData("message 1"))
+    val event = new Event("DummyEvent", AggregateId(aggregateId), DummyEventData("message 1"))
     val sendTask = client.sendEvent(event)(_.content)(global)
 
     val readTask = KafkaConsumerObservable.createConsumer[String, String](
@@ -57,7 +57,7 @@ class ClientSpec extends FlatSpec with GivenWhenThen {
 
     val events = Await.result(sendTask.flatMap(_ => readTask).runAsync, 10.seconds)
 
-    assert(events == List("message 1"))
+    assert(events == List(event.data.content))
   }
 
   it should "listen for messages" in {
