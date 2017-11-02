@@ -17,68 +17,88 @@ import scala.concurrent.Await
 import scala.concurrent.duration._
 
 class ClientSpec extends FlatSpec with GivenWhenThen {
+  private val kafkaUrl = "127.0.0.1:9092"
+  private val client = new Client(new EvenStoreConfig(kafkaUrl))
 
-  case class DummyEventData(content: String)
-  val client = new Client(new EvenStoreConfig("172.19.0.3:9092"))
-
-  "Client" should "read all messages from topic" in {
+  "Client" should "read all the events for an aggregate" in {
     val topic = UUID.randomUUID().toString
-    val producerCfg = KafkaProducerConfig.default.copy(
-      bootstrapServers = List("172.19.0.3:9092")
+
+    val testRecords = Observable.range(0, 3)
+      .map(msg => new ProducerRecord(
+        topic,
+        "obs",
+        s"""{"eventType":"dummy","aggregateId":"$msg","data":"$msg"}"""))
+    val writeTestDataTask = writeRecords(topic, testRecords)
+
+    val result = Await.result(
+      writeTestDataTask.flatMap(_ =>
+        client.readAllEvents(topic,  data => Right(DummyEventData(data)))
+      ).runAsync,
+      10.seconds
     )
 
-    val producer = KafkaProducerSink[String,String](producerCfg, global)
-
-    val writeTask = Observable.range(0, 3)
-      .map(msg => new ProducerRecord(topic, "obs", msg.toString))
-      .bufferIntrospective(1024)
-      .consumeWith(producer)
-
-    val runTask = writeTask.flatMap(_ => client.readAllEvents(topic,  data => Right(DummyEventData(data))))
-
-    val events = Await.result(runTask.runAsync, 10.seconds)
-    assert(events.size == 3)
+    assert(result.size == 3)
   }
 
   it should "send events" in {
     val aggregateId = UUID.randomUUID().toString
 
-    val event = new Event("DummyEvent", AggregateId(aggregateId), DummyEventData("message 1"))
+    val event = new Event(
+      "DummyEvent",
+      AggregateId(aggregateId),
+      DummyEventData("message 1")
+    )
+
     val sendTask = client.sendEvent(event)(_.content)(global)
+    val readTask = readEvents(aggregateId)
+    val result = Await.result(sendTask.flatMap(_ => readTask).runAsync, 10.seconds)
 
-    val readTask = KafkaConsumerObservable.createConsumer[String, String](
-      KafkaConsumerConfig.default.copy(
-        bootstrapServers = List("172.19.0.3:9092"),
-        autoOffsetReset = AutoOffsetReset.Earliest,
-        groupId = UUID.randomUUID().toString
-      ),
-      List(aggregateId)
-    ).map(_.poll(3.second.toMillis).asScala.map(_.value()))
-
-    val events = Await.result(sendTask.flatMap(_ => readTask).runAsync, 10.seconds)
-
-    assert(events == List(event.data.content))
+    assert(result == List(event.data.content))
   }
 
   it should "listen for messages" in {
     val topic = UUID.randomUUID().toString
-    val producerCfg = KafkaProducerConfig.default.copy(
-      bootstrapServers = List("172.19.0.3:9092")
-    )
 
-    val producer = KafkaProducerSink[String,String](producerCfg, global)
-
-    val writeTask = Observable.range(0, 1000)
+    val testRecords= Observable.range(0, 1000)
       .map(msg => new ProducerRecord(topic, "obs", msg.toString))
-      .bufferIntrospective(1024)
-      .consumeWith(producer)
+
+    val writeTestDataTask = writeRecords(topic, testRecords)
 
     val readTask = client.observableReader(topic).take(1000)
       .consumeWith(Consumer.foldLeft(List[String]())((s, a) => a.value() :: s))
 
-    val (results, _) = Await.result(Task.zip2(readTask, writeTask).runAsync, 10.seconds)
+    val (results, _) = Await.result(
+      Task.zip2(readTask, writeTestDataTask).runAsync,
+      10.seconds
+    )
 
     assert(results.size == 1000)
   }
-  
+
+  private case class DummyEventData(content: String)
+
+  private def writeRecords(topic: String,
+    records: Observable[ProducerRecord[String, String]]): Task[Unit] = {
+
+    val producerCfg = KafkaProducerConfig.default.copy(
+      bootstrapServers = List(kafkaUrl)
+    )
+
+    val producer = KafkaProducerSink[String,String](producerCfg, global)
+
+    records.bufferIntrospective(1024)
+      .consumeWith(producer)
+  }
+
+  private def readEvents(topic: String): Task[List[String]] = {
+    KafkaConsumerObservable.createConsumer[String, String](
+      KafkaConsumerConfig.default.copy(
+        bootstrapServers = List(kafkaUrl),
+        autoOffsetReset = AutoOffsetReset.Earliest,
+        groupId = UUID.randomUUID().toString
+      ),
+      List(topic)
+    ).map(_.poll(3.second.toMillis).asScala.toList.map(_.value()))
+  }
 }
+
